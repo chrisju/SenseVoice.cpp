@@ -4,6 +4,7 @@
 #include "common.h"
 #include "sense-voice.h"
 #include "silero-vad.h"
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <thread>
@@ -651,18 +652,6 @@ int main(int argc, char **argv) {
 
 
                 {
-                    float speech_prob = 0;
-                    silero_vad_encode_internal(*ctx, *ctx->state, chunk, params.n_threads, speech_prob);
-                    if (speech_prob >= params.threshold && temp_end) {
-                        temp_end = 0;
-                        if (next_start < prev_end) next_start = CHUNK_SIZE * i;
-                    }
-
-                    if (speech_prob >= params.threshold && !triggered) {
-                        triggered = true;
-                        current_speech_start = i;
-                        continue;
-                    }
                     if (triggered && i - current_speech_start > max_speech_samples) {
                         if (prev_end) {
                             current_speech_end = prev_end;
@@ -681,26 +670,21 @@ int main(int argc, char **argv) {
                             } else {
                                 current_speech_start = next_start;
                             }
-                            // find an endpoint in speech
-                            speech_segment.clear();
-                            std::cout << "current_speech_start: " << current_speech_start << std::endl;
-                            std::cout << "current_speech_end: " << current_speech_end << std::endl;
-                            std::cout << current_speech_end - current_speech_start << std::endl;
-                            speech_segment.assign(pcmf32.begin() + current_speech_start, pcmf32.begin() + current_speech_end);
-                            if (sense_voice_full_parallel(ctx, wparams, speech_segment, speech_segment.size(), params.n_processors) != 0) {
-                                fprintf(stderr, "%s: failed to process audio\n", argv[0]);
-                                return 10;
-                            }
-                            sense_voice_print_output(ctx, true, params.use_itn, false);
-                            current_speech_end = current_speech_start = 0;
-                            prev_end = next_start = temp_end = 0;
-
-                        } else {
-                            current_speech_end = i;
-                            prev_end = next_start = temp_end = 0;
-                            triggered = false;
-                            continue;
+                            prev_end = 0;
                         }
+                    }
+
+                    float speech_prob = 0;
+                    silero_vad_encode_internal(*ctx, *ctx->state, chunk, params.n_threads, speech_prob);
+                    if (speech_prob >= params.threshold) {
+                        if (temp_end) temp_end = 0;
+                        if (next_start < prev_end) next_start = i;
+                    }
+
+                    if (speech_prob >= params.threshold && !triggered) {
+                        triggered = true;
+                        current_speech_start = i;
+                        continue;
                     }
 
                     if (speech_prob < params.neg_threshold && triggered) {
@@ -710,12 +694,15 @@ int main(int argc, char **argv) {
 
                         if (i - temp_end > min_silence_samples_at_max_speech) {
                             prev_end = temp_end;
+                        } else {
+                            continue;
                         }
 
-                        if (i - temp_end < min_silence_samples) {
+                        // TODO min_silence_samples -> max_silence_samples
+                        if (i - prev_end < min_silence_samples) {
                             continue;
                         } else {
-                            current_speech_end = temp_end;
+                            current_speech_end = prev_end;
                             if (current_speech_end - current_speech_start > min_speech_samples) {
                                 // find an endpoint in speech
                                 speech_segment.clear();
@@ -728,7 +715,7 @@ int main(int argc, char **argv) {
                                 sense_voice_print_output(ctx, true, params.use_itn, false);
                                 current_speech_end = current_speech_start = 0;
                             }
-                            prev_end = next_start = temp_end = 0;
+                            prev_end = next_start = 0;
                             triggered = false;
                             continue;
                         }
@@ -736,9 +723,16 @@ int main(int argc, char **argv) {
                 }
             }
             // last segment speech
-            if (current_speech_start != 0 && current_speech_end != 0 && pcmf32.size() - current_speech_start > min_speech_samples) {
+            if (triggered && pcmf32.size() - 1 - current_speech_start > min_speech_samples) {
+                if (temp_end) {
+                    current_speech_end = temp_end;
+                } else {
+                    current_speech_end = pcmf32.size() - 1;
+                }
+                std::cout << "current_speech_start: " << current_speech_start << std::endl;
+                std::cout << "current_speech_end: " << current_speech_end << std::endl;
                 speech_segment.clear();
-                speech_segment.assign(pcmf32.begin() + current_speech_start, pcmf32.begin() + pcmf32.size());
+                speech_segment.assign(pcmf32.begin() + current_speech_start, pcmf32.begin() + current_speech_end);
                 printf("[%.2f-%.2f] ", current_speech_start / (sample_rate * 1.0), current_speech_end / (sample_rate * 1.0));
                 if (sense_voice_full_parallel(ctx, wparams, speech_segment, speech_segment.size(), params.n_processors) != 0) {
                     fprintf(stderr, "%s: failed to process audio\n", argv[0]);
