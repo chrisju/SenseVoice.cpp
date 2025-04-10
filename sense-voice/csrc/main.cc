@@ -683,6 +683,9 @@ int main(int argc, char **argv) {
                             }
                             // find an endpoint in speech
                             speech_segment.clear();
+                            std::cout << "current_speech_start: " << current_speech_start << std::endl;
+                            std::cout << "current_speech_end: " << current_speech_end << std::endl;
+                            std::cout << current_speech_end - current_speech_start << std::endl;
                             speech_segment.assign(pcmf32.begin() + current_speech_start, pcmf32.begin() + current_speech_end);
                             if (sense_voice_full_parallel(ctx, wparams, speech_segment, speech_segment.size(), params.n_processors) != 0) {
                                 fprintf(stderr, "%s: failed to process audio\n", argv[0]);
