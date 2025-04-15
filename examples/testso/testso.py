@@ -9,12 +9,26 @@ import easycpp
 #EXPORT int sense_voice_speech2text(const char *audio_data, const char *str_params);
 
 if __name__ == '__main__':
-    #cmdarg = '-m ../sense-voice-gguf/sense-voice-small-q8_0.gguf -t 18 -ng --max_speech_duration_ms 5000  --min_silence_duration_ms 550'
-    cmdarg = ' '.join(sys.argv[1:]).encode('utf-8')
-    print(f'cmdarg: {cmdarg}')
     cpp = easycpp.easycpp('build/lib/libsense-voice.so')
-    r = cpp.sense_voice_load(cmdarg)
-    print(f'sense_voice_load: {r}')
-    r = cpp.sense_voice_speech2text(cmdarg)
-    print(f'sense_voice_speech2text: {r}')
+
+    mode = 2
+
+    if mode == 1:
+
+        # ./examples/testso/testso.py -m ../sense-voice-gguf/sense-voice-small-q8_0.gguf -t 18 -ng --max_speech_duration_ms 5000  --min_silence_duration_ms 550 ../01.wav
+        cmdarg = ' '.join(sys.argv[1:]).encode('utf-8')
+        print(f'cmdarg: {cmdarg}')
+        r = cpp.sense_voice_load(cmdarg)
+        print(f'sense_voice_load: {r}')
+        r = cpp.sense_voice_speech2text(cmdarg)
+        print(f'sense_voice_speech2text: {r}')
+    else:
+
+        # ./examples/testso/testso.py ../01.wav
+        cmdarg = '-m ../sense-voice-gguf/sense-voice-small-q8_0.gguf -t 18 -ng --max_speech_duration_ms 5000  --min_silence_duration_ms 550'.encode('utf-8')
+        print(f'cmdarg: {cmdarg}')
+        r = cpp.sense_voice_load(cmdarg)
+        print(f'sense_voice_load: {r}')
+        audio = open(sys.argv[1], 'rb').read()
+        r = cpp.sense_voice_speechbuff2text(cmdarg, audio, len(audio))
 

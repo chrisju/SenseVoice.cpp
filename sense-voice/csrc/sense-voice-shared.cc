@@ -4,6 +4,7 @@
 #include "common.h"
 #include "sense-voice.h"
 #include "silero-vad.h"
+#include "mstream.h"
 #include <cmath>
 #include <cstdint>
 #include <thread>
@@ -25,6 +26,7 @@ extern "C" {
 
 EXPORT int sense_voice_load(const char *str_params);
 EXPORT int sense_voice_speech2text(const char *str_params);
+EXPORT int sense_voice_speechbuff2text(const char *str_params, const char *audio_data, int audio_data_len);
 
 #ifdef __cplusplus
 }
@@ -527,6 +529,7 @@ static int parse_params(sense_voice_params &params, const char *str_params) {
     }
     free(argv);// 释放内存
 
+    /*
     // remove non-existent files
     for (auto it = params.fname_inp.begin(); it != params.fname_inp.end();) {
         const auto fname_inp = it->c_str();
@@ -545,6 +548,7 @@ static int parse_params(sense_voice_params &params, const char *str_params) {
         sense_voice_print_usage(argc, argv, params);
         return 2;
     }
+    */
 
     if (params.language != "auto" && sense_voice_lang_id(params.language.c_str()) == -1) {
         fprintf(stderr, "error: unknown language '%s'\n", params.language.c_str());
@@ -587,25 +591,15 @@ EXPORT int sense_voice_load(const char *str_params) {
     return 0;
 }
 
-EXPORT int sense_voice_speech2text(const char *str_params) {
-    std::cout << "param: " << str_params << std::endl;
-    sense_voice_params params;
-    int ret = parse_params(params, str_params);
-    if (ret != 0) {
-        return ret;
-    }
-
+static int sense_voice_speech2text_internal(sense_voice_params &params, std::istream &is) {
     ctx->language_id = sense_voice_lang_id(params.language.c_str());
 
-    for (int f = 0; f < (int) params.fname_inp.size(); ++f) {
-        const auto fname_inp = params.fname_inp[f];
-        const auto fname_out = f < (int) params.fname_out.size() && !params.fname_out[f].empty() ? params.fname_out[f] : params.fname_inp[f];
+    {
         std::vector<double> pcmf32;// mono-channel F32 PCM
 
         int sample_rate;
-        if (!::load_wav_file(fname_inp.c_str(), &sample_rate, pcmf32)) {
-            fprintf(stderr, "error: failed to read WAV file '%s'\n", fname_inp.c_str());
-            continue;
+        if (!::load_wav_file(is, &sample_rate, pcmf32)) {
+            return 11;
         }
 
         if (!params.no_prints) {
@@ -710,7 +704,7 @@ EXPORT int sense_voice_speech2text(const char *str_params) {
                             speech_segment.assign(pcmf32.begin() + current_speech_start, pcmf32.begin() + current_speech_end);
                             printf("[%.2f-%.2f] ", current_speech_start / (sample_rate * 1.0), current_speech_end / (sample_rate * 1.0));
                             if (sense_voice_full_parallel(ctx, wparams, speech_segment, speech_segment.size(), params.n_processors) != 0) {
-                                fprintf(stderr, "%s: failed to process audio\n");
+                                fprintf(stderr, "failed to process audio\n");
                                 return 10;
                             }
                             sense_voice_print_output(ctx, true, params.use_itn, false);
@@ -759,7 +753,7 @@ EXPORT int sense_voice_speech2text(const char *str_params) {
                                 speech_segment.assign(pcmf32.begin() + current_speech_start, pcmf32.begin() + current_speech_end);
                                 printf("[%.2f-%.2f] ", current_speech_start / (sample_rate * 1.0), current_speech_end / (sample_rate * 1.0));
                                 if (sense_voice_full_parallel(ctx, wparams, speech_segment, speech_segment.size(), params.n_processors) != 0) {
-                                    fprintf(stderr, "%s: failed to process audio\n");
+                                    fprintf(stderr, "failed to process audio\n");
                                     return 10;
                                 }
                                 sense_voice_print_output(ctx, true, params.use_itn, false);
@@ -783,7 +777,7 @@ EXPORT int sense_voice_speech2text(const char *str_params) {
                 speech_segment.assign(pcmf32.begin() + current_speech_start, pcmf32.begin() + current_speech_end);
                 printf("[%.2f-%.2f] ", current_speech_start / (sample_rate * 1.0), current_speech_end / (sample_rate * 1.0));
                 if (sense_voice_full_parallel(ctx, wparams, speech_segment, speech_segment.size(), params.n_processors) != 0) {
-                    fprintf(stderr, "%s: failed to process audio\n");
+                    fprintf(stderr, "failed to process audio\n");
                     return 10;
                 }
                 sense_voice_print_output(ctx, true, params.use_itn, false);
@@ -794,6 +788,43 @@ EXPORT int sense_voice_speech2text(const char *str_params) {
                              (ctx->state->t_encode_us + ctx->state->t_decode_us) / 1e6,
                              (ctx->state->t_encode_us + ctx->state->t_decode_us) / (1e6 * ctx->state->duration));
     }
-    sense_voice_free(ctx);
+    //sense_voice_free(ctx);
+    return 0;
+}
+
+EXPORT int sense_voice_speech2text(const char *str_params) {
+    std::cout << "param: " << str_params << std::endl;
+    sense_voice_params params;
+    int ret = parse_params(params, str_params);
+    if (ret != 0) {
+        return ret;
+    }
+
+    for (int f = 0; f < (int) params.fname_inp.size(); ++f) {
+        const auto fname_inp = params.fname_inp[f];
+        const auto fname_out = f < (int) params.fname_out.size() && !params.fname_out[f].empty() ? params.fname_out[f] : params.fname_inp[f];
+
+        std::ifstream is(fname_inp, std::ios::binary);
+        sense_voice_speech2text_internal(params, is);
+    }
+    //sense_voice_free(ctx);
+    return 0;
+}
+
+EXPORT int sense_voice_speechbuff2text(const char *str_params, const char *audio_data, int audio_data_len) {
+    std::cout << "param: " << str_params << std::endl;
+    std::cout << "data: " << audio_data << std::endl;
+    std::cout << "len: " << audio_data_len << std::endl;
+    sense_voice_params params;
+    int ret = parse_params(params, str_params);
+    if (ret != 0) {
+        return ret;
+    }
+
+    mstream is(audio_data, audio_data_len);
+    if (sense_voice_speech2text_internal(params, is) != 0) {
+        return 11;
+    }
+    //sense_voice_free(ctx);
     return 0;
 }

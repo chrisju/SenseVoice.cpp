@@ -237,7 +237,7 @@ bool fbank_lfr_cmvn_feature(const std::vector<double> &samples,
   return true;
 }
 
-bool load_wav_file(std::ifstream &is, int32_t *sampling_rate,
+bool load_wav_file(std::istream &is, int32_t *sampling_rate,
                    std::vector<double> &data) {
   struct WaveHeader header {};
 
