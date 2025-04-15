@@ -237,16 +237,11 @@ bool fbank_lfr_cmvn_feature(const std::vector<double> &samples,
   return true;
 }
 
-bool load_wav_file(const char *filename, int32_t *sampling_rate,
+bool load_wav_file(std::ifstream &is, int32_t *sampling_rate,
                    std::vector<double> &data) {
   struct WaveHeader header {};
 
-  std::ifstream is(filename, std::ifstream::binary);
   is.read(reinterpret_cast<char *>(&header), sizeof(header));
-  if (!is) {
-    std::cout << "Failed to read " << filename;
-    return false;
-  }
 
   if (!header.Validate()) {
     return false;
@@ -269,7 +264,6 @@ bool load_wav_file(const char *filename, int32_t *sampling_rate,
     memset(speech_buff, 0, sizeof(int16_t) * speech_len);
     is.read(reinterpret_cast<char *>(speech_buff), header.subchunk2_size);
     if (!is) {
-      std::cout << "Failed to read " << filename;
       return false;
     }
 
@@ -287,3 +281,16 @@ bool load_wav_file(const char *filename, int32_t *sampling_rate,
 
 }
 
+bool load_wav_file(const char *filename, int32_t *sampling_rate,
+                   std::vector<double> &data) {
+  std::ifstream is(filename, std::ifstream::binary);
+  if (!is) {
+    std::cout << "Failed to read " << filename;
+    return false;
+  }
+  bool ret = load_wav_file(is, sampling_rate, data);
+  if (!ret) {
+    std::cout << "Failed to read " << filename;
+  }
+  return ret;
+}

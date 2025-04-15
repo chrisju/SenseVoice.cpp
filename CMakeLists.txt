@@ -20,6 +20,8 @@ if (CMAKE_BUILD_TYPE STREQUAL "Release")
 else ()
     set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -g -Wall -pthread")
 endif ()
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fPIC")
+
 
 
 
