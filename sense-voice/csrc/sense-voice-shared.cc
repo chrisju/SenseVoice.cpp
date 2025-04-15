@@ -2,9 +2,9 @@
 // Created by lovemefan on 2024/7/21.
 //
 #include "common.h"
+#include "mstream.h"
 #include "sense-voice.h"
 #include "silero-vad.h"
-#include "mstream.h"
 #include <cmath>
 #include <cstdint>
 #include <thread>
@@ -25,8 +25,8 @@ extern "C" {
 #endif
 
 EXPORT int sense_voice_load(const char *str_params);
-EXPORT int sense_voice_speech2text(const char *str_params);
-EXPORT int sense_voice_speechbuff2text(const char *str_params, const char *audio_data, int audio_data_len);
+EXPORT int sense_voice_speech2text(const char *str_params, char **text);
+EXPORT int sense_voice_speechbuff2text(const char *str_params, const char *audio_data, int audio_data_len, char **text);
 
 #ifdef __cplusplus
 }
@@ -591,7 +591,29 @@ EXPORT int sense_voice_load(const char *str_params) {
     return 0;
 }
 
-static int sense_voice_speech2text_internal(sense_voice_params &params, std::istream &is) {
+std::string sense_voice_get_output(struct sense_voice_context *ctx, bool need_prefix, float current_speech_start, float current_speech_end, int sample_rate) {
+    char time_buffer[64];
+    snprintf(time_buffer, sizeof(time_buffer), "[%.3f-%.3f] ", current_speech_start / (sample_rate * 1.0), current_speech_end / (sample_rate * 1.0));
+
+    std::string output = time_buffer;
+
+    for (size_t i = (need_prefix ? 0 : 4); i < ctx->state->ids.size(); i++) {
+        int id = ctx->state->ids[i];
+        if (i > 0 && ctx->state->ids[i - 1] == ctx->state->ids[i])
+            continue;
+        if (id)
+            output += ctx->vocab.id_to_token[id];
+    }
+    output += "\n";
+
+    return output;
+}
+
+int sense_voice_speech2text_internal(sense_voice_params &params, std::istream &is, char **text) {
+    static char *outbuff = nullptr;
+    static int  outbuffsize = 0;
+    std::string output;
+
     ctx->language_id = sense_voice_lang_id(params.language.c_str());
 
     {
@@ -599,7 +621,7 @@ static int sense_voice_speech2text_internal(sense_voice_params &params, std::ist
 
         int sample_rate;
         if (!::load_wav_file(is, &sample_rate, pcmf32)) {
-            return 11;
+            return -11;
         }
 
         if (!params.no_prints) {
@@ -702,12 +724,11 @@ static int sense_voice_speech2text_internal(sense_voice_params &params, std::ist
                             // find an endpoint in speech
                             speech_segment.clear();
                             speech_segment.assign(pcmf32.begin() + current_speech_start, pcmf32.begin() + current_speech_end);
-                            printf("[%.2f-%.2f] ", current_speech_start / (sample_rate * 1.0), current_speech_end / (sample_rate * 1.0));
                             if (sense_voice_full_parallel(ctx, wparams, speech_segment, speech_segment.size(), params.n_processors) != 0) {
                                 fprintf(stderr, "failed to process audio\n");
-                                return 10;
+                                return -10;
                             }
-                            sense_voice_print_output(ctx, true, params.use_itn, false);
+                            output += sense_voice_get_output(ctx, true, current_speech_start, current_speech_end, sample_rate);
                             current_speech_end = current_speech_start = 0;
                             if (next_start < prev_end) {
                                 triggered = false;
@@ -751,12 +772,11 @@ static int sense_voice_speech2text_internal(sense_voice_params &params, std::ist
                                 // find an endpoint in speech
                                 speech_segment.clear();
                                 speech_segment.assign(pcmf32.begin() + current_speech_start, pcmf32.begin() + current_speech_end);
-                                printf("[%.2f-%.2f] ", current_speech_start / (sample_rate * 1.0), current_speech_end / (sample_rate * 1.0));
                                 if (sense_voice_full_parallel(ctx, wparams, speech_segment, speech_segment.size(), params.n_processors) != 0) {
                                     fprintf(stderr, "failed to process audio\n");
-                                    return 10;
+                                    return -10;
                                 }
-                                sense_voice_print_output(ctx, true, params.use_itn, false);
+                                output += sense_voice_get_output(ctx, true, current_speech_start, current_speech_end, sample_rate);
                                 current_speech_end = current_speech_start = 0;
                             }
                             prev_end = next_start = 0;
@@ -775,12 +795,11 @@ static int sense_voice_speech2text_internal(sense_voice_params &params, std::ist
                 }
                 speech_segment.clear();
                 speech_segment.assign(pcmf32.begin() + current_speech_start, pcmf32.begin() + current_speech_end);
-                printf("[%.2f-%.2f] ", current_speech_start / (sample_rate * 1.0), current_speech_end / (sample_rate * 1.0));
                 if (sense_voice_full_parallel(ctx, wparams, speech_segment, speech_segment.size(), params.n_processors) != 0) {
                     fprintf(stderr, "failed to process audio\n");
-                    return 10;
+                    return -10;
                 }
-                sense_voice_print_output(ctx, true, params.use_itn, false);
+                output += sense_voice_get_output(ctx, true, current_speech_start, current_speech_end, sample_rate);
             }
         }
         SENSE_VOICE_LOG_INFO("\n%s: decoder audio use %f s, rtf is %f. \n\n",
@@ -789,10 +808,28 @@ static int sense_voice_speech2text_internal(sense_voice_params &params, std::ist
                              (ctx->state->t_encode_us + ctx->state->t_decode_us) / (1e6 * ctx->state->duration));
     }
     //sense_voice_free(ctx);
-    return 0;
+
+    {
+        int len = output.size() + 1;
+        int alignment = 128;
+        len = (len + alignment - 1) & ~(alignment - 1);
+        if (outbuffsize < len) {
+            free(outbuff); outbuffsize = 0;
+            outbuff = static_cast<char*>(malloc(len));
+            if (outbuff == nullptr) {
+                std::cerr << "Memory allocation failed" << std::endl;
+                return -12;
+            }
+            outbuffsize = len;
+        }
+        std::strcpy(outbuff, output.c_str());
+    }
+
+    *text = outbuff;
+    return output.size();
 }
 
-EXPORT int sense_voice_speech2text(const char *str_params) {
+EXPORT int sense_voice_speech2text(const char *str_params, char **text) {
     std::cout << "param: " << str_params << std::endl;
     sense_voice_params params;
     int ret = parse_params(params, str_params);
@@ -805,13 +842,13 @@ EXPORT int sense_voice_speech2text(const char *str_params) {
         const auto fname_out = f < (int) params.fname_out.size() && !params.fname_out[f].empty() ? params.fname_out[f] : params.fname_inp[f];
 
         std::ifstream is(fname_inp, std::ios::binary);
-        sense_voice_speech2text_internal(params, is);
+        sense_voice_speech2text_internal(params, is, text);
     }
     //sense_voice_free(ctx);
     return 0;
 }
 
-EXPORT int sense_voice_speechbuff2text(const char *str_params, const char *audio_data, int audio_data_len) {
+EXPORT int sense_voice_speechbuff2text(const char *str_params, const char *audio_data, int audio_data_len, char **text) {
     std::cout << "param: " << str_params << std::endl;
     std::cout << "data: " << audio_data << std::endl;
     std::cout << "len: " << audio_data_len << std::endl;
@@ -822,7 +859,7 @@ EXPORT int sense_voice_speechbuff2text(const char *str_params, const char *audio
     }
 
     mstream is(audio_data, audio_data_len);
-    if (sense_voice_speech2text_internal(params, is) != 0) {
+    if (sense_voice_speech2text_internal(params, is, text) != 0) {
         return 11;
     }
     //sense_voice_free(ctx);
